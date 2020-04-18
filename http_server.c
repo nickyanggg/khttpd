@@ -12,13 +12,13 @@
 #define HTTP_RESPONSE_200_DUMMY                               \
     ""                                                        \
     "HTTP/1.1 200 OK" CRLF "Server: " KBUILD_MODNAME CRLF     \
-    "Content-Type: text/plain" CRLF "Content-Length: 12" CRLF \
-    "Connection: Close" CRLF CRLF "Hello World!" CRLF
+    "Content-Type: text/plain" CRLF "Content-Length: %d" CRLF \
+    "Connection: Close" CRLF CRLF "%s" CRLF
 #define HTTP_RESPONSE_200_KEEPALIVE_DUMMY                     \
     ""                                                        \
     "HTTP/1.1 200 OK" CRLF "Server: " KBUILD_MODNAME CRLF     \
-    "Content-Type: text/plain" CRLF "Content-Length: 12" CRLF \
-    "Connection: Keep-Alive" CRLF CRLF "Hello World!" CRLF
+    "Content-Type: text/plain" CRLF "Content-Length: %d" CRLF \
+    "Connection: Keep-Alive" CRLF CRLF "%s" CRLF
 #define HTTP_RESPONSE_501                                              \
     ""                                                                 \
     "HTTP/1.1 501 Not Implemented" CRLF "Server: " KBUILD_MODNAME CRLF \
@@ -73,6 +73,69 @@ static int http_server_send(struct socket *sock, const char *buf, size_t size)
     return done;
 }
 
+bignum *fib_sequence(int k)
+{
+    bignum *a = bn_tmp("0"), *b = bn_tmp("1");
+    bignum *t1 = bn_tmp("0"), *t2 = bn_tmp("0");
+    bignum *tmp = bn_tmp("2");
+    if (k == 0)
+        return a;
+    int i = 31 - __builtin_clz(k), j;
+    for (; i >= 0; i--) {
+        bn_multiply(bn_tmp("2"), b, tmp);
+        bn_subtract(tmp, a, tmp);
+        bn_multiply(a, tmp, t1);
+        bn_multiply(b, b, tmp);
+        bn_multiply(a, a, t2);
+        bn_add(tmp, t2, t2);
+        for (j = 0; j < t2->length; j++) {
+            a->decimal[j] = t1->decimal[j];
+            b->decimal[j] = t2->decimal[j];
+        }
+        a->length = t1->length;
+        b->length = t2->length;
+        if ((k >> i) & 1) {
+            bn_add(a, b, t1);
+            for (j = 0; j < t1->length; j++) {
+                a->decimal[j] = b->decimal[j];
+                b->decimal[j] = t1->decimal[j];
+            }
+            a->length = b->length;
+            b->length = t1->length;
+        }
+    }
+    return a;
+}
+
+static char *fib_url(char *url, int keep_alive)
+{
+    char *response = keep_alive ? HTTP_RESPONSE_200_KEEPALIVE_DUMMY
+                                : HTTP_RESPONSE_200_DUMMY;
+    char *ret, *token, *tmp = url, result[MAX_DIGIT];
+    int size, length, i;
+    strsep(&tmp, "/");
+    token = strsep(&tmp, "/");
+    if (!strcmp(token, "fib")) {
+        token = strsep(&tmp, "/");
+        long num;
+        kstrtol(token, 10, &num);
+        // bignum max digit = 1000, fib(4500) digit = 941
+        if (num > 4500 || num < 0)
+            return NULL;
+        char *rev_fib = fib_sequence(num)->decimal;
+        length = strlen(rev_fib);
+        for (i = 0; i < length; i++)
+            result[i] = rev_fib[length - 1 - i];
+        result[length] = '\0';
+    } else
+        return NULL;
+
+    size = strlen(response) + length * 2;
+    ret = kmalloc(size, GFP_KERNEL);
+    snprintf(ret, size, response, length, result);
+    return ret;
+}
+
 static int http_server_response(struct http_request *request, int keep_alive)
 {
     char *response;
@@ -81,9 +144,9 @@ static int http_server_response(struct http_request *request, int keep_alive)
     if (request->method != HTTP_GET)
         response = keep_alive ? HTTP_RESPONSE_501_KEEPALIVE : HTTP_RESPONSE_501;
     else
-        response = keep_alive ? HTTP_RESPONSE_200_KEEPALIVE_DUMMY
-                              : HTTP_RESPONSE_200_DUMMY;
+        response = fib_url(request->request_url, keep_alive);
     http_server_send(request->socket, response, strlen(response));
+    kfree(response);
     return 0;
 }
 

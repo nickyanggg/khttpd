@@ -2,6 +2,7 @@
 #define KHTTPD_HTTP_SERVER_H
 
 #include <net/sock.h>
+#include "bignum.h"
 
 struct http_server_param {
     struct socket *listen_socket;
